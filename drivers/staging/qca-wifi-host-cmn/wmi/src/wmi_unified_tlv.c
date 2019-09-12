@@ -3926,9 +3926,10 @@ QDF_STATUS send_setup_install_key_cmd_tlv(wmi_unified_t wmi_handle,
 
 	status = wmi_unified_cmd_send(wmi_handle, buf, len,
 					      WMI_VDEV_INSTALL_KEY_CMDID);
-	if (QDF_IS_STATUS_ERROR(status))
+	if (QDF_IS_STATUS_ERROR(status)) {
+		qdf_mem_zero(wmi_buf_data(buf), len);
 		wmi_buf_free(buf);
-
+	}
 	return status;
 }
 
@@ -7372,6 +7373,7 @@ QDF_STATUS send_get_stats_cmd_tlv(wmi_unified_t wmi_handle,
 		WMI_REQUEST_PEER_STAT | WMI_REQUEST_PDEV_STAT |
 		WMI_REQUEST_VDEV_STAT | WMI_REQUEST_RSSI_PER_CHAIN_STAT;
 	cmd->vdev_id = get_stats_param->session_id;
+	cmd->pdev_id = get_stats_param->pdev_id;
 	WMI_CHAR_ARRAY_TO_MAC_ADDR(addr, &cmd->peer_macaddr);
 	WMI_LOGD("STATS REQ VDEV_ID:%d-->", cmd->vdev_id);
 	if (wmi_unified_cmd_send(wmi_handle, buf, len,
@@ -10893,8 +10895,10 @@ QDF_STATUS send_log_supported_evt_cmd_tlv(wmi_unified_t wmi_handle,
 			__func__, num_of_diag_events_logs);
 
 	/* Free any previous allocation */
-	if (wmi_handle->events_logs_list)
+	if (wmi_handle->events_logs_list) {
 		qdf_mem_free(wmi_handle->events_logs_list);
+		wmi_handle->events_logs_list = NULL;
+	}
 
 	if (num_of_diag_events_logs >
 		(WMI_SVC_MSG_MAX_SIZE / sizeof(uint32_t))) {
@@ -15106,6 +15110,77 @@ static QDF_STATUS send_btm_config_cmd_tlv(wmi_unified_t wmi_handle,
 	return QDF_STATUS_SUCCESS;
 }
 
+#ifdef FW_THERMAL_THROTTLE_SUPPORT
+/**
+ * send_thermal_mitigation_param_cmd_tlv() - configure thermal mitigation params
+ * @wmi_handle: handle to WMI.
+ * @param: pointer to hold thermal mitigation param
+ *
+ * Return: QDF_STATUS_SUCCESS on success and appropriate error on failure.
+ */
+static QDF_STATUS send_thermal_mitigation_param_cmd_tlv(
+		wmi_unified_t wmi_handle,
+		struct thermal_mitigation_params *param)
+{
+	wmi_therm_throt_config_request_fixed_param *tt_conf;
+	wmi_therm_throt_level_config_info *lvl_conf = NULL;
+	wmi_buf_t buf = NULL;
+	uint8_t *buf_ptr = NULL;
+	QDF_STATUS error;
+	size_t len;
+	int i;
+
+	len = sizeof(*tt_conf) + WMI_TLV_HDR_SIZE +
+				 param->num_thermal_conf *
+				 sizeof(wmi_therm_throt_level_config_info);
+
+	buf = wmi_buf_alloc(wmi_handle, len);
+	if (!buf)
+		return QDF_STATUS_E_NOMEM;
+
+	tt_conf = (wmi_therm_throt_config_request_fixed_param *)
+							wmi_buf_data(buf);
+
+	/* init fixed params */
+	WMITLV_SET_HDR(
+		tt_conf,
+		WMITLV_TAG_STRUC_wmi_therm_throt_config_request_fixed_param,
+		WMITLV_GET_STRUCT_TLVLEN(
+		wmi_therm_throt_config_request_fixed_param));
+
+	tt_conf->enable = param->enable;
+	tt_conf->dc = param->dc;
+	tt_conf->therm_throt_levels = param->num_thermal_conf;
+
+	buf_ptr = (uint8_t *)(++tt_conf);
+	/* init TLV params */
+	WMITLV_SET_HDR(buf_ptr, WMITLV_TAG_ARRAY_STRUC,
+		       param->num_thermal_conf *
+		       sizeof(wmi_therm_throt_level_config_info));
+
+	lvl_conf = (wmi_therm_throt_level_config_info *)(buf_ptr +
+							  WMI_TLV_HDR_SIZE);
+	for (i = 0; i < param->num_thermal_conf; i++) {
+		WMITLV_SET_HDR(
+			&lvl_conf->tlv_header,
+			WMITLV_TAG_STRUC_wmi_therm_throt_level_config_info,
+			WMITLV_GET_STRUCT_TLVLEN(
+			wmi_therm_throt_level_config_info));
+		lvl_conf->dc_off_percent = param->levelconf[i].dcoffpercent;
+		lvl_conf++;
+	}
+
+	error = wmi_unified_cmd_send(wmi_handle, buf, len,
+				     WMI_THERM_THROT_SET_CONF_CMDID);
+	if (QDF_IS_STATUS_ERROR(error)) {
+		wmi_buf_free(buf);
+		WMI_LOGE("Failed to send WMI_THERM_THROT_SET_CONF_CMDID cmd");
+	}
+
+	return error;
+}
+#endif
+
 struct wmi_ops tlv_ops =  {
 	.send_vdev_create_cmd = send_vdev_create_cmd_tlv,
 	.send_vdev_delete_cmd = send_vdev_delete_cmd_tlv,
@@ -15409,6 +15484,10 @@ struct wmi_ops tlv_ops =  {
 	.send_offload_11k_cmd = send_offload_11k_cmd_tlv,
 	.send_invoke_neighbor_report_cmd = send_invoke_neighbor_report_cmd_tlv,
 	.send_btm_config = send_btm_config_cmd_tlv,
+#ifdef FW_THERMAL_THROTTLE_SUPPORT
+	.send_thermal_mitigation_param_cmd =
+			send_thermal_mitigation_param_cmd_tlv,
+#endif
 };
 
 #ifdef WMI_TLV_AND_NON_TLV_SUPPORT
@@ -15757,6 +15836,8 @@ static void populate_tlv_events_id(uint32_t *event_ids)
 	event_ids[wmi_sar_get_limits_event_id] = WMI_SAR_GET_LIMITS_EVENTID;
 	event_ids[wmi_roam_scan_stats_event_id] = WMI_ROAM_SCAN_STATS_EVENTID;
 	event_ids[wmi_wlan_sar2_result_event_id] = WMI_SAR2_RESULT_EVENTID;
+	event_ids[wmi_roam_pmkid_request_event_id] =
+				WMI_ROAM_PMKID_REQUEST_EVENTID;
 }
 
 /**

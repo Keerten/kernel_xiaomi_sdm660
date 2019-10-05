@@ -39,6 +39,8 @@ static inline void update_cpu_load_active(struct rq *this_rq) { }
 static inline void check_for_migration(struct rq *rq, struct task_struct *p) { }
 #endif
 
+extern bool energy_aware(void);
+
 /*
  * Helpers for converting nanosecond timing to jiffy resolution
  */
@@ -2124,8 +2126,3 @@ walt_task_in_cum_window_demand(struct rq *rq, struct task_struct *p)
 #else /* arch_scale_freq_capacity */
 #define arch_scale_freq_invariant()     (false)
 #endif
-
-static inline bool energy_aware(void)
-{
-	return sched_feat(ENERGY_AWARE);
-}

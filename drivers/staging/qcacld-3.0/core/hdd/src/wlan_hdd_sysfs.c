@@ -122,6 +122,7 @@ static void hdd_power_debugstats_dealloc(void *priv)
 	stats->power_stats.debug_registers = NULL;
 }
 
+#ifdef WLAN_POWER_DEBUGFS
 static void hdd_power_debugstats_cb(struct power_stats_response *response,
 				    void *context)
 {
@@ -162,6 +163,7 @@ static void hdd_power_debugstats_cb(struct power_stats_response *response,
 	osif_request_put(request);
 	hdd_exit();
 }
+#endif
 
 static ssize_t __show_device_power_stats(struct kobject *kobj,
 					 struct kobj_attribute *attr,
@@ -194,9 +196,11 @@ static ssize_t __show_device_power_stats(struct kobject *kobj,
 	}
 	cookie = osif_request_cookie(request);
 
+#ifdef WLAN_POWER_DEBUGFS
 	status = sme_power_debug_stats_req(hdd_ctx->mac_handle,
 					   hdd_power_debugstats_cb,
 					   cookie);
+#endif
 	if (QDF_IS_STATUS_ERROR(status)) {
 		hdd_err("chip power stats request failed");
 		ret_cnt = qdf_status_to_os_return(status);
